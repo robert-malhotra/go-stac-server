@@ -23,13 +23,14 @@ func init() {
 	viper.Set("database.dsn", dsn)
 }
 
-// TestItemsServiceCRUDIntegration performs an end-to-end test of the ItemsService CRUD methods.
+// TestItemsServiceCRUDIntegration performs an end-to-end test of the STACService CRUD methods for items,
+// including the new ListItems and GetItemsByIDs functions.
 func TestItemsServiceCRUDIntegration(t *testing.T) {
 	// Use a context with a timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Instantiate the STACService.
+	// Instantiate the unified STACService.
 	svc := service.NewSTACService()
 
 	// Generate unique collection and item IDs.
@@ -37,7 +38,6 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 		Id:    fmt.Sprintf("test-collection-%d", time.Now().UnixNano()),
 		Title: "Integration Test Collection",
 	}
-
 	itemID := fmt.Sprintf("test-item-%d", time.Now().UnixNano())
 
 	// --- SETUP: Create a dummy collection ---
@@ -47,15 +47,15 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	require.NoError(t, err, "failed to create dummy collection")
 
 	// --- CREATE ---
-	// Create a new item. Note that we now include a valid geometry.
+	// Create a new item. Note that we now include a valid geometry as a GeoJSON object.
 	item := &stac.Item{
 		Id:         itemID,
 		Collection: testCollection.Id,
-		Geometry: map[string]any{
+		Geometry: map[string]interface{}{
 			"type":        "Point",
 			"coordinates": []float64{0.0, 0.0},
 		},
-		Properties: map[string]any{
+		Properties: map[string]interface{}{
 			"title":    "Test Item",
 			"datetime": time.Now().Format(time.RFC3339),
 		},
@@ -94,6 +94,36 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	require.NoError(t, err, "failed to patch item")
 	require.NotNil(t, patched, "patched item should not be nil")
 	require.Equal(t, "Patched Test Item", patched.Properties["title"], "patched item title should match")
+
+	// --- NEW: LIST ITEMS ---
+	// Test the ListItems function.
+	// We assume that service.CQL is defined and that the SearchResponse type includes a Features field,
+	// where each feature has an Id field.
+	listResponse, err := svc.ListItems(ctx, testCollection.Id, service.CQL{})
+	require.NoError(t, err, "failed to list items")
+	require.NotNil(t, listResponse, "list items response should not be nil")
+	found := false
+	for _, feature := range listResponse.Features {
+		if feature.Id == itemID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "created item should be found in list items")
+
+	// --- NEW: GET ITEMS BY IDS ---
+	// Test the GetItemsByIDs function.
+	itemsByIDsResponse, err := svc.GetItemsByIDs(ctx, testCollection.Id, []string{itemID})
+	require.NoError(t, err, "failed to get items by IDs")
+	require.NotNil(t, itemsByIDsResponse, "get items by IDs response should not be nil")
+	found = false
+	for _, feature := range itemsByIDsResponse.Features {
+		if feature.Id == itemID {
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "created item should be found in getItemsByIDs response")
 
 	// --- DELETE ---
 	err = svc.DeleteItem(ctx, testCollection.Id, itemID)

@@ -12,7 +12,7 @@ import (
 	"github.com/go-geospatial/go-stac-server/jsonutil"
 	"github.com/goccy/go-json"
 	"github.com/jackc/pgx/v5"
-	"github.com/planetlabs/go-stac" // adjust if necessary
+	"github.com/planetlabs/go-stac"
 )
 
 // CreateItem inserts a new item into the database.
@@ -139,42 +139,45 @@ func (s *STACService) GetItem(ctx context.Context, collectionID, itemID string) 
 
 // ListItems returns a FeatureCollection of items in the specified collection.
 // The search criteria is provided as a stac.CQL object.
-// func (s *ItemsService) ListItems(ctx context.Context, collectionID string, cql stac.CQL) (*stac.ItemsList, error) {
-// 	if collectionID == "" {
-// 		return nil, errors.New("collectionID is required")
-// 	}
+func (s *STACService) ListItems(ctx context.Context, collectionID string, cql CQL) (*SearchResponse, error) {
+	if collectionID == "" {
+		return nil, errors.New("collectionID is required")
+	}
+	if cql.Limit == 0 {
+		cql.Limit = 100 //TODO: make configurable
+	}
 
-// 	// Ensure that the CQL is restricted to the provided collection.
-// 	cql.Collections = []string{collectionID}
+	// Ensure that the CQL is restricted to the provided collection.
+	cql.Collections = []string{collectionID}
 
-// 	// stac.Search is assumed to perform the query and return a FeatureCollection.
-// 	featureCollection, err := stac.Search(cql)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("stac search returned an error: %w", err)
-// 	}
+	// stac.Search is assumed to perform the query and return a FeatureCollection.
+	featureCollection, err := Search(cql)
+	if err != nil {
+		return nil, fmt.Errorf("stac search returned an error: %w", err)
+	}
 
-// 	return featureCollection, nil
-// }
+	return featureCollection, nil
+}
 
 // // GetItemsByIDs retrieves items matching the supplied list of IDs from the specified collection.
-// func (s *ItemsService) GetItemsByIDs(ctx context.Context, collectionID string, ids []string) (*stac.ItemsList, error) {
-// 	if collectionID == "" {
-// 		return nil, errors.New("collectionID is required")
-// 	}
-// 	if len(ids) == 0 {
-// 		return nil, errors.New("no item IDs provided")
-// 	}
+func (s *STACService) GetItemsByIDs(ctx context.Context, collectionID string, ids []string) (*SearchResponse, error) {
+	if collectionID == "" {
+		return nil, errors.New("collectionID is required")
+	}
+	if len(ids) == 0 {
+		return nil, errors.New("no item IDs provided")
+	}
 
-// 	cql := stac.CQL{
-// 		Collections: []string{collectionID},
-// 		Ids:         ids,
-// 		Limit:       10, // Adjust the limit as needed.
-// 	}
+	cql := CQL{
+		Collections: []string{collectionID},
+		Ids:         ids,
+		Limit:       100, //TODO: make configurable?
+	}
 
-// 	featureCollection, err := stac.Search(cql)
-// 	if err != nil {
-// 		return nil, fmt.Errorf("stac search returned an error: %w", err)
-// 	}
+	items, err := Search(cql)
+	if err != nil {
+		return nil, fmt.Errorf("stac search returned an error: %w", err)
+	}
 
-// 	return featureCollection, nil
-// }
+	return items, nil
+}

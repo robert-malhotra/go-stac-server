@@ -15,6 +15,25 @@ import (
 	"github.com/planetlabs/go-stac"
 )
 
+func (s *STACService) CreateItems(ctx context.Context, fc stac.ItemsList) (*stac.ItemsList, error) {
+	if len(fc.Items) == 0 {
+		return nil, errors.New("items list is empty")
+	}
+
+	itemsJSON, err := json.Marshal(fc.Items)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal items to JSON: %w", err)
+	}
+
+	pool := database.GetInstance(ctx)
+	// Assumes a stored procedure create_items(jsonb) exists.
+	if _, err = pool.Exec(ctx, "SELECT create_items($1::text::jsonb)", itemsJSON); err != nil {
+		return nil, fmt.Errorf("failed to create items: %w", err)
+	}
+
+	return &fc, nil
+}
+
 // CreateItem inserts a new item into the database.
 func (s *STACService) CreateItem(ctx context.Context, item *stac.Item) (*stac.Item, error) {
 	if item == nil {

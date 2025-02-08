@@ -9,7 +9,7 @@ import (
 	"time"
 
 	"github.com/go-geospatial/go-stac-server/service"
-	"github.com/planetlabs/go-stac" // using Planet Labs' Go-STAC types
+	"github.com/planetlabs/go-stac" // using Planet Labs' Go‑STAC types
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
 )
@@ -23,8 +23,6 @@ func init() {
 	viper.Set("database.dsn", dsn)
 }
 
-// TestItemsServiceCRUDIntegration performs an end-to-end test of the STACService CRUD methods for items,
-// including the new ListItems and GetItemsByIDs functions.
 func TestItemsServiceCRUDIntegration(t *testing.T) {
 	// Use a context with a timeout.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -33,7 +31,7 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	// Instantiate the unified STACService.
 	svc := service.NewSTACService()
 
-	// Generate unique collection and item IDs.
+	// Generate a unique collection and item ID.
 	testCollection := stac.Collection{
 		Id:    fmt.Sprintf("test-collection-%d", time.Now().UnixNano()),
 		Title: "Integration Test Collection",
@@ -41,13 +39,11 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	itemID := fmt.Sprintf("test-item-%d", time.Now().UnixNano())
 
 	// --- SETUP: Create a dummy collection ---
-	// Many stored procedures expect that the collection exists.
-	// Here we insert a minimal dummy collection into the database.
 	_, err := svc.CreateCollection(context.Background(), &testCollection)
 	require.NoError(t, err, "failed to create dummy collection")
 
-	// --- CREATE ---
-	// Create a new item. Note that we now include a valid geometry as a GeoJSON object.
+	// --- SINGLE ITEM: CREATE ---
+	// Create a new item. Note that we include a valid GeoJSON geometry.
 	item := &stac.Item{
 		Id:         itemID,
 		Collection: testCollection.Id,
@@ -68,23 +64,21 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	require.Equal(t, testCollection.Id, created.Collection, "created item collection should match")
 	require.Equal(t, "Test Item", created.Properties["title"], "initial item title should match")
 
-	// --- GET ---
+	// --- SINGLE ITEM: GET ---
 	retrieved, err := svc.GetItem(ctx, testCollection.Id, itemID)
 	require.NoError(t, err, "failed to retrieve item")
 	require.NotNil(t, retrieved, "retrieved item should not be nil")
 	require.Equal(t, itemID, retrieved.Id, "retrieved item id should match")
 	require.Equal(t, testCollection.Id, retrieved.Collection, "retrieved item collection should match")
 
-	// --- UPDATE ---
-	// Update the item's title.
+	// --- SINGLE ITEM: UPDATE ---
 	created.Properties["title"] = "Updated Test Item"
 	updated, err := svc.UpdateItem(ctx, created)
 	require.NoError(t, err, "failed to update item")
 	require.NotNil(t, updated, "updated item should not be nil")
 	require.Equal(t, "Updated Test Item", updated.Properties["title"], "updated item title should match")
 
-	// --- PATCH ---
-	// Prepare a patch to update the title to a new value.
+	// --- SINGLE ITEM: PATCH ---
 	patch := map[string]interface{}{
 		"properties": map[string]interface{}{
 			"title": "Patched Test Item",
@@ -96,10 +90,8 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	require.Equal(t, "Patched Test Item", patched.Properties["title"], "patched item title should match")
 
 	// --- NEW: LIST ITEMS ---
-	// Test the ListItems function.
-	// We assume that service.CQL is defined and that the SearchResponse type includes a Features field,
-	// where each feature has an Id field.
-	listResponse, err := svc.ListItems(ctx, testCollection.Id, service.CQL{})
+	// Specify a nonzero limit in the CQL so that items are returned.
+	listResponse, err := svc.ListItems(ctx, testCollection.Id, service.CQL{Limit: 100})
 	require.NoError(t, err, "failed to list items")
 	require.NotNil(t, listResponse, "list items response should not be nil")
 	found := false
@@ -112,7 +104,6 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	require.True(t, found, "created item should be found in list items")
 
 	// --- NEW: GET ITEMS BY IDS ---
-	// Test the GetItemsByIDs function.
 	itemsByIDsResponse, err := svc.GetItemsByIDs(ctx, testCollection.Id, []string{itemID})
 	require.NoError(t, err, "failed to get items by IDs")
 	require.NotNil(t, itemsByIDsResponse, "get items by IDs response should not be nil")
@@ -125,7 +116,64 @@ func TestItemsServiceCRUDIntegration(t *testing.T) {
 	}
 	require.True(t, found, "created item should be found in getItemsByIDs response")
 
-	// --- DELETE ---
+	// --- NEW: CREATE MULTIPLE ITEMS ---
+	// Generate unique IDs for two new items.
+	multiItem1ID := fmt.Sprintf("test-multi-item-%d", time.Now().UnixNano())
+	multiItem2ID := fmt.Sprintf("test-multi-item-%d", time.Now().UnixNano())
+	multiItems := stac.ItemsList{
+		Items: []*stac.Item{
+			{
+				Id:         multiItem1ID,
+				Collection: testCollection.Id,
+				Geometry: map[string]interface{}{
+					"type":        "Point",
+					"coordinates": []float64{1.0, 1.0},
+				},
+				Properties: map[string]interface{}{
+					"title":    "Multi Item 1",
+					"datetime": time.Now().Format(time.RFC3339),
+				},
+			},
+			{
+				Id:         multiItem2ID,
+				Collection: testCollection.Id,
+				Geometry: map[string]interface{}{
+					"type":        "Point",
+					"coordinates": []float64{2.0, 2.0},
+				},
+				Properties: map[string]interface{}{
+					"title":    "Multi Item 2",
+					"datetime": time.Now().Format(time.RFC3339),
+				},
+			},
+		},
+	}
+
+	createdItemsList, err := svc.CreateItems(ctx, multiItems)
+	require.NoError(t, err, "failed to create multiple items")
+	require.NotNil(t, createdItemsList, "created items list should not be nil")
+	require.Equal(t, len(multiItems.Items), len(createdItemsList.Items), "number of created items should match")
+
+	// Verify that each item in the multi-items list is retrievable.
+	var multiItemIDs []string
+	for _, it := range multiItems.Items {
+		multiItemIDs = append(multiItemIDs, it.Id)
+	}
+	itemsByIDsMulti, err := svc.GetItemsByIDs(ctx, testCollection.Id, multiItemIDs)
+	require.NoError(t, err, "failed to get items by ids for multi items")
+	require.NotNil(t, itemsByIDsMulti, "get items by ids multi response should not be nil")
+	for _, id := range multiItemIDs {
+		found := false
+		for _, feature := range itemsByIDsMulti.Features {
+			if feature.Id == id {
+				found = true
+				break
+			}
+		}
+		require.True(t, found, fmt.Sprintf("multi created item with id %s should be found", id))
+	}
+
+	// --- CLEANUP: DELETE SINGLE ITEM ---
 	err = svc.DeleteItem(ctx, testCollection.Id, itemID)
 	require.NoError(t, err, "failed to delete item")
 

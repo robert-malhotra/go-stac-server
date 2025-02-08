@@ -1,0 +1,18 @@
+services:
+  pgstac:
+    container_name: pgstac
+    image: ghcr.io/stac-utils/pgstac:v0.9.2
+    environment:
+      - POSTGRES_USER=username
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=postgis
+      - PGUSER=username
+      - PGPASSWORD=password
+      - PGDATABASE=postgis
+    ports:
+      - "5439:5432"
+    volumes:
+      - pgstac-pgdata:/var/lib/postgresql/data
+    command: postgres
+volumes:
+  pgstac-pgdata:

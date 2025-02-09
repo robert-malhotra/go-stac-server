@@ -14,5 +14,19 @@ services:
     volumes:
       - pgstac-pgdata:/var/lib/postgresql/data
     command: postgres
+  go-stac-server:
+    container_name: go-stac-server
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      # DSN must point to the postgres service; adjust the password as desired.
+      - DSN=postgresql://username:password@postgres:5439/postgis
+      - PORT=3000
+      - BASE_URL=http://localhost:3000
+      # Optional: other configuration parameters (e.g., catalog details)
+      - STAC_CATALOG_ID=stac-catalog
+      - STAC_CATALOG_TITLE="STAC API"
+      - STAC_CATALOG_DESCRIPTION="go-stac-server STAC API"
 volumes:
   pgstac-pgdata:

@@ -20,60 +20,83 @@ import (
 	"fmt"
 
 	"github.com/go-geospatial/go-stac-server/database"
-	"github.com/go-geospatial/go-stac-server/stac"
 	"github.com/gofiber/fiber/v2"
+	"github.com/planetlabs/go-stac"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 )
+
+var ConformanceClasses = []string{
+	"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
+	"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
+	// TODO: "http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
+	"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+	"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+	"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
+	"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/filter",
+	"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
+	"https://api.stacspec.org/v1.0.0/collections",
+	"https://api.stacspec.org/v1.0.0/core",
+	"https://api.stacspec.org/v1.0.0-rc.3/browseable",
+	"https://api.stacspec.org/v1.0.0/item-search",
+	"https://api.stacspec.org/v1.0.0-rc.2/item-search#context",
+	"https://api.stacspec.org/v1.0.0-rc.3/item-search#fields",
+	"https://api.stacspec.org/v1.0.0-rc.2/item-search#filter",
+	"https://api.stacspec.org/v1.0.0-rc.2/item-search#query",
+	"https://api.stacspec.org/v1.0.0-rc.2/item-search#sort",
+	"https://api.stacspec.org/v1.0.0/ogcapi-features",
+	"https://api.stacspec.org/v1.0.0-rc.3/ogcapi-features#fields",
+	"https://api.stacspec.org/v1.0.0-rc.2/ogcapi-features#sort",
+	"https://api.stacspec.org/v1.0.0-rc.2/ogcapi-features/extensions/transaction",
+	"http://www.opengis.net/spec/ogcapi-features-4/1.0/conf/simpletx",
+}
 
 func Catalog(c *fiber.Ctx) error {
 	ctx := context.Background()
 
 	baseURL := getBaseURL(c)
 	self := fmt.Sprintf("%s/api/stac/v1", baseURL)
-	links := make([]stac.Link, 0, 100)
-	links = append(links, stac.Link{
+	links := make([]*stac.Link, 0, 100)
+	links = append(links, &stac.Link{
 		Rel:  "self",
 		Type: "application/json",
 		Href: self,
 	})
-	links = append(links, stac.Link{
+	links = append(links, &stac.Link{
 		Rel:  "root",
 		Type: "application/json",
 		Href: self,
 	})
-	links = append(links, stac.Link{
+	links = append(links, &stac.Link{
 		Rel:  "data",
 		Type: "application/json",
 		Href: fmt.Sprintf("%s/collections", self),
 	})
-	links = append(links, stac.Link{
+	links = append(links, &stac.Link{
 		Rel:   "conformance",
 		Type:  "application/json",
 		Title: "STAC/WFS3 conformance classes implemented by this server",
 		Href:  fmt.Sprintf("%s/conformance", self),
 	})
-	links = append(links, stac.Link{
-		Rel:    "search",
-		Type:   "application/geo+json",
-		Title:  "STAC search",
-		Href:   fmt.Sprintf("%s/search", self),
-		Method: "GET",
+	links = append(links, &stac.Link{
+		Rel:   "search",
+		Type:  "application/geo+json",
+		Title: "STAC search",
+		Href:  fmt.Sprintf("%s/search", self),
 	})
-	links = append(links, stac.Link{
-		Rel:    "search",
-		Type:   "application/geo+json",
-		Title:  "STAC search",
-		Href:   fmt.Sprintf("%s/search", self),
-		Method: "POST",
+	links = append(links, &stac.Link{
+		Rel:   "search",
+		Type:  "application/geo+json",
+		Title: "STAC search",
+		Href:  fmt.Sprintf("%s/search", self),
 	})
-	links = append(links, stac.Link{
+	links = append(links, &stac.Link{
 		Rel:   "service-desc",
 		Type:  "application/vnd.oai.openapi+json;version=3.1",
 		Title: "OpenAPI service description",
 		Href:  fmt.Sprintf("%s/openapi.json", baseURL),
 	})
-	links = append(links, stac.Link{
+	links = append(links, &stac.Link{
 		Rel:   "service-doc",
 		Type:  "text/html",
 		Title: "OpenAPI service documentation",
@@ -86,14 +109,14 @@ func Catalog(c *fiber.Ctx) error {
 	if err != nil {
 		log.Error().Err(err).Msg("error querying collections for catalog response")
 		c.Status(fiber.StatusInternalServerError)
-		return c.JSON(stac.Message{
+		return c.JSON(Message{
 			Code:        database.QueryErrorCode,
 			Description: "could not query collections table",
 		})
 	}
 	defer rows.Close()
 	for rows.Next() {
-		child := stac.Link{
+		child := &stac.Link{
 			Rel:  "child",
 			Type: "application/json",
 		}
@@ -102,7 +125,7 @@ func Catalog(c *fiber.Ctx) error {
 		if err != nil {
 			log.Error().Err(err).Msg("could not scan collection id and title")
 			c.Status(fiber.StatusInternalServerError)
-			return c.JSON(stac.Message{
+			return c.JSON(Message{
 				Code:        database.QueryErrorCode,
 				Description: "could not serialize data from collections table",
 			})
@@ -112,12 +135,11 @@ func Catalog(c *fiber.Ctx) error {
 	}
 
 	catalog := stac.Catalog{
-		Type:        "Catalog",
-		ID:          viper.GetString("stac.catalog.id"),
+		Id:          viper.GetString("stac.catalog.id"),
 		Title:       viper.GetString("stac.catalog.title"),
 		Description: viper.GetString("stac.catalog.description"),
-		StacVersion: "1.0.0",
-		ConformsTo:  stac.Conformance,
+		Version:     "1.0.0",
+		ConformsTo:  ConformanceClasses,
 		Links:       links,
 	}
 

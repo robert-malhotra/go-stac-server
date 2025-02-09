@@ -16,14 +16,38 @@
 package handler
 
 import (
-	"github.com/go-geospatial/go-stac-server/stac"
 	"github.com/gofiber/fiber/v2"
 )
 
 func Conformance(c *fiber.Ctx) error {
+	conf := []string{
+		"http://www.opengis.net/spec/cql2/1.0/conf/basic-cql2",
+		"http://www.opengis.net/spec/cql2/1.0/conf/cql2-json",
+		// TODO: "http://www.opengis.net/spec/cql2/1.0/conf/cql2-text",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/geojson",
+		"http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/oas30",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/filter",
+		"http://www.opengis.net/spec/ogcapi-features-3/1.0/conf/features-filter",
+		"https://api.stacspec.org/v1.0.0/collections",
+		"https://api.stacspec.org/v1.0.0/core",
+		"https://api.stacspec.org/v1.0.0-rc.3/browseable",
+		"https://api.stacspec.org/v1.0.0/item-search",
+		"https://api.stacspec.org/v1.0.0-rc.2/item-search#context",
+		"https://api.stacspec.org/v1.0.0-rc.3/item-search#fields",
+		"https://api.stacspec.org/v1.0.0-rc.2/item-search#filter",
+		"https://api.stacspec.org/v1.0.0-rc.2/item-search#query",
+		"https://api.stacspec.org/v1.0.0-rc.2/item-search#sort",
+		"https://api.stacspec.org/v1.0.0/ogcapi-features",
+		"https://api.stacspec.org/v1.0.0-rc.3/ogcapi-features#fields",
+		"https://api.stacspec.org/v1.0.0-rc.2/ogcapi-features#sort",
+		"https://api.stacspec.org/v1.0.0-rc.2/ogcapi-features/extensions/transaction",
+		"http://www.opengis.net/spec/ogcapi-features-4/1.0/conf/simpletx",
+	}
+
 	return c.JSON(struct {
 		ConformsTo []string `json:"conformsTo"`
 	}{
-		ConformsTo: stac.Conformance,
+		ConformsTo: conf,
 	})
 }

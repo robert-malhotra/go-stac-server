@@ -1,304 +1,162 @@
-// Copyright 2021-2023
-// SPDX-License-Identifier: Apache-2.0
-//
-// Licensed under the Apache License, Version 2.0 (the "License");
-// you may not use this file except in compliance with the License.
-// You may obtain a copy of the License at
-//
-// http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing, software
-// distributed under the License is distributed on an "AS IS" BASIS,
-// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-// See the License for the specific language governing permissions and
-// limitations under the License.
-
+// collection_handler.go
 package handler
 
 import (
-	"context"
-	"errors"
 	"fmt"
 
-	"github.com/go-geospatial/go-stac-server/database"
-	"github.com/go-geospatial/go-stac-server/stac"
-	json "github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2"
-	"github.com/jackc/pgx/v5"
+	"github.com/planetlabs/go-stac"
 	"github.com/rs/zerolog/log"
 )
 
-// ModifyCollection creates a new collection in the database
-// POST /collections
-// PUT /collections
+// ModifyCollection handles both creation (POST) and update (PUT) of a collection.
+// Endpoint: POST /collections   and   PUT /collections
 func ModifyCollection(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := c.Context()
 
-	// validate passed JSON
-	collectionRaw := c.Body()
-	collection := make(map[string]*json.RawMessage)
-
-	if err := json.Unmarshal(collectionRaw, &collection); err != nil {
-		log.Error().Err(err).Str("RequestBody", string(collectionRaw)).Msg("cannot unmarshal provided JSON in CreateCollection")
-		c.Status(fiber.StatusBadRequest)
-		return c.JSON(stac.Message{
-			Code:        stac.ParameterError,
-			Description: "JSON parse failed; collection must be a valid JSON object",
+	// Parse the request body into a stac.Collection.
+	var coll stac.Collection
+	if err := c.BodyParser(&coll); err != nil {
+		log.Error().Err(err).Msg("failed to parse collection JSON")
+		return c.Status(fiber.StatusBadRequest).JSON(Message{
+			Code:        ParameterError,
+			Description: "invalid JSON for collection",
 		})
 	}
 
-	var id string
+	// Make sure the collection has an ID.
+	if coll.Id == "" {
+		return c.Status(fiber.StatusBadRequest).JSON(Message{
+			Code:        ParameterError,
+			Description: "collection id is required",
+		})
+	}
+
+	// Call the appropriate service method.
+	var result *stac.Collection
 	var err error
-	if id, err = stac.ValidateID(c, collection); err != nil {
-		return err
-	}
-
-	collectionJSON, err := json.Marshal(collection)
-	if err != nil {
-		log.Error().Err(err).Msg("failed to marshal collection to JSON")
-		c.Status(fiber.StatusInternalServerError)
-		return c.JSON(stac.Message{
-			Code:        stac.ParameterError,
-			Description: "failed to marshal JSON for collection",
-		})
-	}
-
-	query := "SELECT create_collection($1::text::jsonb)"
-	if c.Method() == "PUT" {
+	if c.Method() == fiber.MethodPut {
 		log.Info().Msg("updating collection")
-		query = "SELECT update_collection($1::text::jsonb)"
+		result, err = stacService.UpdateCollection(ctx, &coll)
+	} else {
+		result, err = stacService.CreateCollection(ctx, &coll)
 	}
-
-	pool := database.GetInstance(ctx)
-	if _, err := pool.Exec(ctx, query, collectionJSON); err != nil {
-		log.Error().Err(err).Str("id", id).Str("raw", string(collectionRaw)).Msg("failed to create collection")
-		c.Status(fiber.StatusBadRequest)
-		return c.JSON(stac.Message{
-			Code:        "CreateCollectionFailed",
-			Description: "failed to create collection",
+	if err != nil {
+		log.Error().Err(err).Msg("failed to modify collection")
+		return c.Status(fiber.StatusBadRequest).JSON(Message{
+			Code:        "ModifyCollectionFailed",
+			Description: err.Error(),
 		})
 	}
 
-	return collectionFromID(c, id)
+	// Enrich the returned collection with extra links.
+	enriched, err := enrichCollection(c, result)
+	if err != nil {
+		return c.Status(fiber.StatusInternalServerError).JSON(Message{
+			Code:        "LinkEnrichmentFailed",
+			Description: err.Error(),
+		})
+	}
+	return c.JSON(enriched)
 }
 
-// DeleteCollection creates a new collection in the database
-// DELETE /collections
+// DeleteCollection deletes a collection.
+// Endpoint: DELETE /collections/:collectionId
 func DeleteCollection(c *fiber.Ctx) error {
-	ctx := context.Background()
+	ctx := c.Context()
 	collectionID := c.Params("collectionId")
 
-	pool := database.GetInstance(ctx)
-	if _, err := pool.Exec(ctx, "SELECT delete_collection($1::text)", collectionID); err != nil {
-		log.Error().Err(err).Str("id", collectionID).Msg("collection not found")
-		c.Status(fiber.ErrNotFound.Code)
-		return c.JSON(stac.Message{
-			Code:        stac.NotFoundError,
+	if err := stacService.DeleteCollection(ctx, collectionID); err != nil {
+		log.Error().Err(err).Str("id", collectionID).Msg("failed to delete collection")
+		return c.Status(fiber.StatusNotFound).JSON(Message{
+			Code:        NotFoundError,
 			Description: "collection not found",
 		})
 	}
 
-	// NOTE: we use the error struct here for convenience because it has a suitable structure for the response
-	return c.JSON(stac.Message{
+	return c.JSON(Message{
 		Code:        "CollectionDeleted",
 		Description: "the collection was successfully deleted",
 	})
 }
 
-// Collection returns details of a specific collection
-// GET /collections/:collectionId/
+// Collection retrieves a single collection by its ID.
+// Endpoint: GET /collections/:collectionId
 func Collection(c *fiber.Ctx) error {
+	ctx := c.Context()
 	collectionID := c.Params("collectionId")
-	return collectionFromID(c, collectionID)
-}
 
-func collectionFromID(c *fiber.Ctx, collectionID string) error {
-	ctx := context.Background()
-	baseURL := getBaseURL(c)
-
-	// get a list of all collections
-	pool := database.GetInstance(ctx)
-	row := pool.QueryRow(ctx, "SELECT get_collection FROM pgstac.get_collection($1)", collectionID)
-
-	collection := make(map[string]*json.RawMessage, 20)
-	var rawCollection string
-	err := row.Scan(&rawCollection)
+	coll, err := stacService.GetCollection(ctx, collectionID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			log.Error().Err(err).Str("collectionId", collectionID).Msg("collection not found")
-			c.Status(fiber.ErrNotFound.Code)
-			return c.JSON(stac.Message{
-				Code:        "404",
-				Description: "collection not found",
-			})
-		}
-
-		// pgstac returns a row even if the collection doesn't exist.
-		log.Error().Str("collection", collectionID).Msg("collection not found")
-		c.Status(fiber.StatusNotFound)
-		return c.JSON(stac.Message{
-			Code:        stac.NotFoundError,
+		log.Error().Err(err).Msg("collection not found")
+		return c.Status(fiber.StatusNotFound).JSON(Message{
+			Code:        NotFoundError,
 			Description: fmt.Sprintf("collection '%s' not found", collectionID),
 		})
 	}
 
-	// un-marshal to map
-	if err := json.Unmarshal([]byte(rawCollection), &collection); err != nil {
-		log.Error().Err(err).Msg("collection JSON unmarshal failed")
-		c.Status(fiber.StatusInternalServerError)
-		_ = c.JSON(stac.Message{
-			Code:        stac.JSONParsingError,
-			Description: "unable to un-marshal collection object JSON",
-		})
-		return err
-	}
-
-	// un-marshal links
-	links := make([]stac.Link, 0, 5)
-	if rawLinks, ok := collection["links"]; ok {
-		if err := json.Unmarshal(*rawLinks, &links); err != nil {
-			log.Error().Err(err).Msg("collection JSON unmarshal failed")
-			c.Status(fiber.StatusInternalServerError)
-			_ = c.JSON(stac.Message{
-				Code:        stac.JSONParsingError,
-				Description: "unable to un-marshal collection links JSON",
-			})
-			return err
-		}
-	}
-
-	// enrich links with self, root, parent, and items references
-	collectionsEndpoint := fmt.Sprintf("/collections/%s", collectionID)
-	links = stac.AddLink(links, baseURL, "self", collectionsEndpoint, "application/json")
-	links = stac.AddLink(links, baseURL, "root", "/", "application/json")
-	links = stac.AddLink(links, baseURL, "parent", "/", "application/json")
-	links = stac.AddLink(links, baseURL, "items", fmt.Sprintf("%s/items", collectionsEndpoint), "application/geo+json")
-
-	var serializedLinks json.RawMessage
-	serializedLinks, err = json.Marshal(links)
+	enriched, err := enrichCollection(c, coll)
 	if err != nil {
-		log.Error().Err(err).Msg("collection links JSON marshal failed")
-		c.Status(fiber.StatusInternalServerError)
-		_ = c.JSON(stac.Message{
-			Code:        stac.JSONParsingError,
-			Description: "unable to marshal collection links to JSON",
+		return c.Status(fiber.StatusInternalServerError).JSON(Message{
+			Code:        "LinkEnrichmentFailed",
+			Description: err.Error(),
 		})
-		return err
 	}
-	collection["links"] = &serializedLinks
-
-	collectionType := json.RawMessage(`"Collection"`)
-	collection["type"] = &collectionType
-
-	return c.JSON(collection)
+	return c.JSON(enriched)
 }
 
-// Collections returns a list of collections managed by this STAC server
-// GET /collections/
+// Collections returns a list of all collections managed by this STAC server.
+// Endpoint: GET /collections
 func Collections(c *fiber.Ctx) error {
-	ctx := context.Background()
-	baseURL := getBaseURL(c)
+	ctx := c.Context()
 
-	collections := make([]*json.RawMessage, 0, 10)
-
-	// get a list of all collections
-	pool := database.GetInstance(ctx)
-	rows, err := pool.Query(ctx, "SELECT id, content FROM pgstac.collections ORDER BY id")
+	collList, err := stacService.ListCollections(ctx)
 	if err != nil {
-		log.Error().Err(err).Msg("error querying collections for list collections response")
-		c.Status(fiber.StatusInternalServerError)
-		return c.JSON(stac.Message{
-			Code:        database.QueryErrorCode,
-			Description: "could not query collections table",
+		log.Error().Err(err).Msg("failed to list collections")
+		return c.Status(fiber.StatusInternalServerError).JSON(Message{
+			Code:        "CollectionsListError",
+			Description: err.Error(),
 		})
 	}
-	defer rows.Close()
-	for rows.Next() {
-		collection := make(map[string]*json.RawMessage, 20)
-		var rawCollection string
-		var collectionID string
-		err := rows.Scan(&collectionID, &rawCollection)
+
+	// Optionally, enrich each collection with additional links.
+	enrichedList := make([]*stac.Collection, 0, len(collList))
+	for _, coll := range collList {
+		enriched, err := enrichCollection(c, coll)
 		if err != nil {
-			log.Error().Err(err).Msg("could not scan collection id and title")
-			c.Status(fiber.StatusInternalServerError)
-			return c.JSON(stac.Message{
-				Code:        database.QueryErrorCode,
-				Description: "could not serialize data from collections table",
-			})
+			// If link enrichment fails, log the error and use the collection as is.
+			log.Error().Err(err).Str("collectionId", coll.Id).Msg("failed to enrich collection links")
+			enrichedList = append(enrichedList, coll)
+		} else {
+			enrichedList = append(enrichedList, enriched)
 		}
-
-		// un-marshal to map
-		if err := json.Unmarshal([]byte(rawCollection), &collection); err != nil {
-			log.Error().Err(err).Msg("collection JSON unmarshal failed")
-			c.Status(fiber.StatusInternalServerError)
-			_ = c.JSON(stac.Message{
-				Code:        stac.JSONParsingError,
-				Description: "unable to un-marshal collection object JSON",
-			})
-			return err
-		}
-
-		// un-marshal links
-		links := make([]stac.Link, 0, 5)
-		if rawLinks, ok := collection["links"]; ok {
-			if err := json.Unmarshal(*rawLinks, &links); err != nil {
-				log.Error().Err(err).Msg("collection JSON unmarshal failed")
-				c.Status(fiber.StatusInternalServerError)
-				_ = c.JSON(stac.Message{
-					Code:        stac.JSONParsingError,
-					Description: "unable to un-marshal collection links JSON",
-				})
-				return err
-			}
-		}
-
-		// enrich links with self, root, parent, and items references
-		collectionsEndpoint := fmt.Sprintf("/collections/%s", collectionID)
-		links = stac.AddLink(links, baseURL, "self", collectionsEndpoint, "application/json")
-		links = stac.AddLink(links, baseURL, "root", "/", "application/json")
-		links = stac.AddLink(links, baseURL, "parent", "/", "application/json")
-		links = stac.AddLink(links, baseURL, "items", fmt.Sprintf("%s/items", collectionsEndpoint), "application/geo+json")
-
-		var serializedLinks json.RawMessage
-		serializedLinks, err = json.Marshal(links)
-		if err != nil {
-			log.Error().Err(err).Msg("collection links JSON marshal failed")
-			c.Status(fiber.StatusInternalServerError)
-			_ = c.JSON(stac.Message{
-				Code:        stac.JSONParsingError,
-				Description: "unable to marshal collection links to JSON",
-			})
-			return err
-		}
-		collection["links"] = &serializedLinks
-
-		collectionType := json.RawMessage(`"Collection"`)
-		collection["type"] = &collectionType
-
-		var serializedCollection json.RawMessage
-		serializedCollection, err = json.Marshal(collection)
-		if err != nil {
-			log.Error().Err(err).Msg("collection JSON marshal failed")
-			c.Status(fiber.StatusInternalServerError)
-			_ = c.JSON(stac.Message{
-				Code:        stac.JSONParsingError,
-				Description: "unable to marshal collection to JSON",
-			})
-			return err
-		}
-		collections = append(collections, &serializedCollection)
 	}
 
-	overallLinks := make([]stac.Link, 0, 3)
-	overallLinks = stac.AddLink(overallLinks, baseURL, "self", "/collections", "application/json")
-	overallLinks = stac.AddLink(overallLinks, baseURL, "root", "/", "application/json")
-	overallLinks = stac.AddLink(overallLinks, baseURL, "parent", "/", "application/json")
+	// Build overall response links.
+	baseURL := getBaseURL(c)
+	overallLinks := []stac.Link{
+		{Rel: "self", Href: fmt.Sprintf("%s/collections", baseURL), Type: "application/json"},
+		{Rel: "root", Href: fmt.Sprintf("%s/", baseURL), Type: "application/json"},
+		{Rel: "parent", Href: fmt.Sprintf("%s/", baseURL), Type: "application/json"},
+	}
 
 	return c.JSON(struct {
-		Collections []*json.RawMessage `json:"collections"`
+		Collections []*stac.Collection `json:"collections"`
 		Links       []stac.Link        `json:"links"`
 	}{
-		Collections: collections,
+		Collections: enrichedList,
 		Links:       overallLinks,
 	})
+}
+
+// enrichCollection is a helper function that adds standard links to a collection.
+func enrichCollection(c *fiber.Ctx, coll *stac.Collection) (*stac.Collection, error) {
+	baseURL := getBaseURL(c)
+	// Add links such as self, root, parent, and items.
+	coll.Links = AddLink(coll.Links, baseURL, "self", fmt.Sprintf("/collections/%s", coll.Id), "application/json")
+	coll.Links = AddLink(coll.Links, baseURL, "root", "/", "application/json")
+	coll.Links = AddLink(coll.Links, baseURL, "parent", "/", "application/json")
+	coll.Links = AddLink(coll.Links, baseURL, "items", fmt.Sprintf("/collections/%s/items", coll.Id), "application/geo+json")
+	// Ensure the type is set.
+	return coll, nil
 }

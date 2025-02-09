@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/go-geospatial/go-stac-server/stac"
+	"github.com/go-geospatial/go-stac-server/service"
 	json "github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog/log"
@@ -46,13 +46,13 @@ func buildQueryArray(c *fiber.Ctx) []string {
 	return queryParts
 }
 
-func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
-	var cql stac.CQL
+func getCQLFromBody(c *fiber.Ctx) (service.CQL, error) {
+	var cql service.CQL
 	if err := json.Unmarshal(c.Body(), &cql); err != nil {
 		log.Error().Err(err).Msg("could not parse search body")
 		c.Status(fiber.StatusBadRequest)
-		return stac.CQL{}, c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		return service.CQL{}, c.JSON(Message{
+			Code:        ParameterError,
 			Description: "could not parse search body",
 		})
 	}
@@ -63,8 +63,8 @@ func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
 		if err := json.Unmarshal(*cql.SortBy, &sortBy); err != nil {
 			log.Error().Err(err).Msg("could not parse sort by field")
 			c.Status(fiber.StatusBadRequest)
-			return stac.CQL{}, c.JSON(stac.Message{
-				Code:        stac.ParameterError,
+			return service.CQL{}, c.JSON(Message{
+				Code:        ParameterError,
 				Description: "could not parse sort by",
 			})
 		}
@@ -75,8 +75,8 @@ func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
 		if err != nil {
 			log.Error().Err(err).Msg("could not parse sort by field")
 			c.Status(fiber.StatusBadRequest)
-			return stac.CQL{}, c.JSON(stac.Message{
-				Code:        stac.ParameterError,
+			return service.CQL{}, c.JSON(Message{
+				Code:        ParameterError,
 				Description: "could not parse sort by",
 			})
 		}
@@ -86,8 +86,8 @@ func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
 		if err != nil {
 			log.Error().Err(err).Msg("could not serialize sort by field")
 			c.Status(fiber.StatusBadRequest)
-			return stac.CQL{}, c.JSON(stac.Message{
-				Code:        stac.ParameterError,
+			return service.CQL{}, c.JSON(Message{
+				Code:        ParameterError,
 				Description: "could not serialize sort by",
 			})
 		}
@@ -97,11 +97,11 @@ func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
 	if len(cql.Bbox) != 0 && cql.Intersects != nil {
 		log.Error().Msg("cannot specify both bbox and intersects")
 		c.Status(fiber.StatusBadRequest)
-		c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		c.JSON(Message{
+			Code:        ParameterError,
 			Description: "cannot specify both bbox and intersects",
 		})
-		return stac.CQL{}, errors.New("cannot specify both bbox and intersects")
+		return service.CQL{}, errors.New("cannot specify both bbox and intersects")
 	}
 
 	// update default value for limit
@@ -112,12 +112,12 @@ func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
 	if limit, err := validateLimit(c, cql.Limit); err == nil {
 		cql.Limit = limit
 	} else {
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// validate bbox
 	if _, err := validateBbox(c, cql.Bbox); err != nil {
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	if cql.FilterLang == "" {
@@ -127,7 +127,7 @@ func getCQLFromBody(c *fiber.Ctx) (stac.CQL, error) {
 	return cql, nil
 }
 
-func getCQLFromQuery(c *fiber.Ctx) (stac.CQL, error) {
+func getCQLFromQuery(c *fiber.Ctx) (service.CQL, error) {
 	collectionsStr := c.Query("collections", "")
 	idsStr := c.Query("ids", "")
 	limitStr := c.Query("limit", "10")
@@ -143,11 +143,11 @@ func getCQLFromQuery(c *fiber.Ctx) (stac.CQL, error) {
 	if bboxStr != "" && intersectsStr != "" {
 		log.Error().Msg("cannot specify both bbox and intersects")
 		c.Status(fiber.StatusBadRequest)
-		c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		c.JSON(Message{
+			Code:        ParameterError,
 			Description: "cannot specify both bbox and intersects",
 		})
-		return stac.CQL{}, errors.New("cannot specify both bbox and intersects")
+		return service.CQL{}, errors.New("cannot specify both bbox and intersects")
 	}
 
 	// parse collections
@@ -160,53 +160,53 @@ func getCQLFromQuery(c *fiber.Ctx) (stac.CQL, error) {
 	limit, err := parseLimit(c, limitStr)
 	if err != nil {
 		// response and logging handled by parseLimit
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// parse bbox
 	bbox, err := parseBboxQuery(c, bboxStr)
 	if err != nil {
 		// response and logging handled by parseBbox
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// parse date string (must be RFC 3339)
 	if err := parseRFC3339Date(c, dateStr); err != nil {
 		// http response and logging handled by parseRFC3339Date
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// parse CQL-2 filter
 	var filter *json.RawMessage
 	if filter, filterLang, err = parseCQL2Filter(c, filterStr, filterLang); err != nil {
 		// http response and logging handled by parseCQL2Filter
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// parse sortby
-	var sort []stac.CQLSort
+	var sort []service.CQLSort
 	if sort, err = parseSort(c, sortByStr); err != nil {
 		// http response and logging handled by parseSort
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// parse fields
-	var fields stac.CQLFields
+	var fields service.CQLFields
 	if fields, err = parseFields(c, fieldStr); err != nil {
 		// http response and logging handled by parseFields
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// parse intersects
-	var intersects *stac.GeoJSON
+	var intersects *service.GeoJSON
 	if intersects, err = parseIntersects(c, intersectsStr); err != nil {
 		// http response and logging handled by parseIntersectsQuery
-		return stac.CQL{}, err
+		return service.CQL{}, err
 	}
 
 	// create CQL search criteria
 	conf := json.RawMessage(`{"nohydrate": false}`)
-	cql := stac.CQL{
+	cql := service.CQL{
 		Limit:    limit,
 		DateTime: dateStr,
 		Token:    token,
@@ -260,10 +260,10 @@ func parseStringList(str string) []string {
 	return strList
 }
 
-func parseSort(c *fiber.Ctx, sortByStr string) ([]stac.CQLSort, error) {
-	var sort []stac.CQLSort
+func parseSort(c *fiber.Ctx, sortByStr string) ([]service.CQLSort, error) {
+	var sort []service.CQLSort
 	if sortByStr != "" {
-		sort = make([]stac.CQLSort, 0, 1)
+		sort = make([]service.CQLSort, 0, 1)
 		sortRe := regexp.MustCompile(`^([\+-]?)(.*)$`)
 		tokens := strings.Split(sortByStr, ",")
 		for _, token := range tokens {
@@ -273,7 +273,7 @@ func parseSort(c *fiber.Ctx, sortByStr string) ([]stac.CQLSort, error) {
 				if groups[1] == "-" {
 					direction = "desc"
 				}
-				sort = append(sort, stac.CQLSort{
+				sort = append(sort, service.CQLSort{
 					Field:     groups[2],
 					Direction: direction,
 				})
@@ -281,8 +281,8 @@ func parseSort(c *fiber.Ctx, sortByStr string) ([]stac.CQLSort, error) {
 				err := errors.New("sort field does not match regex")
 				log.Error().Err(err).Msg("sort field does not match regex")
 				c.Status(fiber.StatusInternalServerError)
-				_ = c.JSON(stac.Message{
-					Code:        stac.ServerError,
+				_ = c.JSON(Message{
+					Code:        ServerError,
 					Description: "sort expression must be of the form ([+-]?)(.*)",
 				})
 				return sort, err
@@ -293,8 +293,8 @@ func parseSort(c *fiber.Ctx, sortByStr string) ([]stac.CQLSort, error) {
 	return sort, nil
 }
 
-func parseFields(c *fiber.Ctx, fieldStr string) (stac.CQLFields, error) {
-	var fields stac.CQLFields
+func parseFields(c *fiber.Ctx, fieldStr string) (service.CQLFields, error) {
+	var fields service.CQLFields
 	if fieldStr != "" {
 		fields.Include = make([]string, 0, 5)
 		fields.Exclude = make([]string, 0, 5)
@@ -313,8 +313,8 @@ func parseFields(c *fiber.Ctx, fieldStr string) (stac.CQLFields, error) {
 				err := errors.New("sort field does not match regex")
 				log.Error().Err(err).Msg("sort field does not match regex")
 				c.Status(fiber.StatusInternalServerError)
-				_ = c.JSON(stac.Message{
-					Code:        stac.ServerError,
+				_ = c.JSON(Message{
+					Code:        ServerError,
 					Description: "fields must be of the form ([-]?)(.*)",
 				})
 				return fields, err
@@ -330,8 +330,8 @@ func parseLimit(c *fiber.Ctx, limitStr string) (int, error) {
 	if err != nil {
 		log.Error().Err(err).Str("limit", limitStr).Msg("could not convert limit to int")
 		c.Status(fiber.StatusBadRequest)
-		_ = c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		_ = c.JSON(Message{
+			Code:        ParameterError,
 			Description: fmt.Sprintf("limit '%s' could not be converted to int", limitStr),
 		})
 		return 0, err
@@ -349,8 +349,8 @@ func validateLimit(c *fiber.Ctx, limit int) (int, error) {
 		err := errors.New("limit out of bounds")
 		log.Warn().Int("limit", limit).Msg("limit out of bounds: limit < 0")
 		c.Status(fiber.StatusBadRequest)
-		_ = c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		_ = c.JSON(Message{
+			Code:        ParameterError,
 			Description: fmt.Sprintf("limit '%d' must be greater than 0", limit),
 		})
 		return 0, err
@@ -364,8 +364,8 @@ func parseRFC3339Date(c *fiber.Ctx, dateStr string) error {
 		if dateStr == "/" || dateStr == "../.." || dateStr == "/.." || dateStr == "../" {
 			// both parts of the interval cannot be open
 			c.Status(fiber.StatusBadRequest)
-			_ = c.JSON(stac.Message{
-				Code:        stac.ParameterError,
+			_ = c.JSON(Message{
+				Code:        ParameterError,
 				Description: fmt.Sprintf("both sides of the interval cannot be open: %s", dateStr),
 			})
 			return errors.New("both parts of the interval cannot be open")
@@ -374,8 +374,8 @@ func parseRFC3339Date(c *fiber.Ctx, dateStr string) error {
 		re := regexp.MustCompile(`^((\d{4})-(0[1-9]|1[0-2])-([012][\d]|3[01])[\sT]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(\.\d+)?(Z|[\+-](0[\d]|1[\d]|2[0-3]):([0-5]\d))|\.\.)?/?((\d{4})-(0[1-9]|1[0-2])-([012][\d]|3[01])[\sT]([01]\d|2[0-3]):([0-5]\d):([0-5]\d)(\.\d+)?(Z|[\+-](0[\d]|1[\d]|2[0-3]):([0-5]\d))|\.\.)?$`)
 		if matched := re.MatchString(dateStr); !matched {
 			c.Status(fiber.StatusBadRequest)
-			_ = c.JSON(stac.Message{
-				Code:        stac.ParameterError,
+			_ = c.JSON(Message{
+				Code:        ParameterError,
 				Description: fmt.Sprintf("datetime '%s' must be of the form (RFC3339|..)/?(RFC3339|..)", dateStr),
 			})
 			return errors.New("datetime is not RFC 3339 formatted")
@@ -395,8 +395,8 @@ func parseBboxQuery(c *fiber.Ctx, bboxStr string) ([]float64, error) {
 			if coord, err = strconv.ParseFloat(bboxCoord, 64); err != nil {
 				log.Error().Err(err).Str("Coord", bboxCoord).Msg("could not convert bbox coordinate to float64")
 				c.Status(fiber.StatusBadRequest)
-				_ = c.JSON(stac.Message{
-					Code:        stac.ParameterError,
+				_ = c.JSON(Message{
+					Code:        ParameterError,
 					Description: fmt.Sprintf("could not parse bbox: '%s'; offending coordinate '%s'. bbox must be 4 or 6 float64 coordinates separated by commas. The coordinate order is: lower left axis-1, lower left axis-2, minimum axis-3 (optional), upper right axis-1, upper right axis-2, maximum axis-3 (optional)", bboxStr, bboxCoord),
 				})
 				return nil, err
@@ -413,8 +413,8 @@ func validateBbox(c *fiber.Ctx, bbox []float64) ([]float64, error) {
 		err := errors.New("bbox must be length 4 or 6")
 		log.Error().Err(err).Floats64("bbox", bbox).Int("len", len(bbox)).Msg("bbox invalid length. must be 4 or 6.")
 		c.Status(fiber.StatusBadRequest)
-		_ = c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		_ = c.JSON(Message{
+			Code:        ParameterError,
 			Description: "bbox of invalid length",
 		})
 		return nil, err
@@ -424,8 +424,8 @@ func validateBbox(c *fiber.Ctx, bbox []float64) ([]float64, error) {
 		err := errors.New("bbox lat1 > lat2")
 		log.Error().Err(err).Floats64("bbox", bbox).Msg("lat1 > lat2")
 		c.Status(fiber.StatusBadRequest)
-		_ = c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		_ = c.JSON(Message{
+			Code:        ParameterError,
 			Description: "bbox invalid lat1 > lat2",
 		})
 		return nil, err
@@ -435,8 +435,8 @@ func validateBbox(c *fiber.Ctx, bbox []float64) ([]float64, error) {
 		err := errors.New("bbox lat1 > lat2")
 		log.Error().Err(err).Floats64("bbox", bbox).Msg("lat1 > lat2")
 		c.Status(fiber.StatusBadRequest)
-		_ = c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		_ = c.JSON(Message{
+			Code:        ParameterError,
 			Description: "bbox invalid lat1 > lat2",
 		})
 		return nil, err
@@ -445,14 +445,14 @@ func validateBbox(c *fiber.Ctx, bbox []float64) ([]float64, error) {
 	return bbox, nil
 }
 
-func parseIntersects(c *fiber.Ctx, intersectsStr string) (*stac.GeoJSON, error) {
-	var intersects stac.GeoJSON
+func parseIntersects(c *fiber.Ctx, intersectsStr string) (*service.GeoJSON, error) {
+	var intersects service.GeoJSON
 	if intersectsStr != "" {
 		if err := json.Unmarshal([]byte(intersectsStr), &intersects); err != nil {
 			log.Error().Err(err).Str("intersects", intersectsStr).Msg("error parsing GeoJson intersects query")
 			c.Status(fiber.StatusBadRequest)
-			_ = c.JSON(stac.Message{
-				Code:        stac.ParameterError,
+			_ = c.JSON(Message{
+				Code:        ParameterError,
 				Description: "could not parse intersects query",
 			})
 			return nil, err
@@ -476,8 +476,8 @@ func parseCQL2Filter(c *fiber.Ctx, filterStr string, filterLang string) (*json.R
 		err := errors.New("filter-lang must be one of 'cql2-text' or 'cql2-json'")
 		log.Error().Err(err).Str("filter-lang", filterLang).Msg("invalid filter-lang provided")
 		c.Status(fiber.StatusBadRequest)
-		_ = c.JSON(stac.Message{
-			Code:        stac.ParameterError,
+		_ = c.JSON(Message{
+			Code:        ParameterError,
 			Description: "invalid filter-lang provided",
 		})
 		return nil, "cql-json", err

@@ -19,7 +19,6 @@ import (
 	"context"
 
 	"github.com/go-geospatial/go-stac-server/database"
-	"github.com/go-geospatial/go-stac-server/stac"
 	json "github.com/goccy/go-json"
 	"github.com/gofiber/fiber/v2"
 	"github.com/rs/zerolog/log"
@@ -39,7 +38,7 @@ func Queryables(c *fiber.Ctx) error {
 	if err := pool.QueryRow(ctx, "SELECT get_queryables FROM get_queryables($1::text)", pCollectionID).Scan(&raw); err != nil {
 		log.Error().Err(err).Str("collection", collectionID).Msg("failed to get queryables from database")
 		c.Status(fiber.StatusInternalServerError)
-		return c.JSON(stac.Message{
+		return c.JSON(Message{
 			Code:        "DatabaseError",
 			Description: "failed to get queryables from database",
 		})
